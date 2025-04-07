@@ -19,6 +19,7 @@ start_date=$(echo "$latest_date" | tr '/' '-')
 
 # Ending date
 end_date="$(date "+%Y-%m-%d")" # "2025-12-31"
+echo "Scrape between $start_date ~ $end_date"
 
 # Function to create a directory for a given date, output the date, and perform a curl request
 dump() {
