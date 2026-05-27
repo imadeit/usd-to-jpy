@@ -1,42 +1,69 @@
-# USD to JPY Converter API
+# USD/JPY 汇率趋势站点
 
-The `usd-to-jpy` is an API for converting between US Dollars (USD) and Japanese Yen (JPY). It supports three types of rates: TTS (Telegraphic Transfer Selling), TTB (Telegraphic Transfer Buying), and TTM (Telegraphic Transfer Middle).
+这个项目维护美元兑日元的 TTB / TTM / TTS 数据。保留原有的静态 API 文件结构：
 
-## URL Format
-
-To use the API, structure your request URL as follows:
-
-```
-https://imadeit.github.io/usd-to-jpy/yyyy/mm/dd/{TTS,TTB,TTM}
+```text
+YYYY/MM/DD/TTB
+YYYY/MM/DD/TTM
+YYYY/MM/DD/TTS
 ```
 
-Replace `yyyy`, `mm`, and `dd` with the year, month, and day respectively. Choose between `TTS`, `TTB`, and `TTM` for the rate type.
+同时每年会生成一个年度 CSV，例如：
 
-## Example
-
-To get the TTM rate for December 15, 2023, use a command like this:
-
-```
-$ curl https://imadeit.github.io/usd-to-jpy/2023/12/15/TTM
-142.45
+```text
+2026/usd-jpy-2026.csv
 ```
 
-This command will return the TTM rate for USD to JPY conversion as of that date.
+CSV 列为 `日期,TTB,TTM,TTS,URL`。年度 CSV 会补齐该年份内没有汇率的日期；这些日期的 TTB / TTM / TTS / URL 保持空白。`URL` 指向有汇率日期的 Mizuho PDF，便于人工核对。
 
-## Usage in Google Sheets
+## 静态查看
 
-This API can also be used in Google Sheets with the `IMPORTDATA` function. To integrate it, simply use the URL format in your `IMPORTDATA` formula. For example:
+直接通过静态服务器打开 `index.html` 即可查看已有 CSV 数据、趋势曲线、原始表格和 CSV 导出。页面默认显示当前年份，也可以切换到已经生成 CSV 的过去年份，或点击“加载全部数据”查看跨年份趋势。
 
+## 本地更新服务
+
+需要“获取最新汇率”或“修正数据”时，启动本地服务：
+
+```bash
+python3 server.py
 ```
-=IMPORTDATA("https://imadeit.github.io/usd-to-jpy/2023/12/15/TTM")
+
+默认地址：
+
+```text
+http://127.0.0.1:9343/
 ```
 
-This will import the TTM rate for USD to JPY conversion on December 15, 2023, directly into your Google Sheets document.
+点击页面上的“获取最新汇率”后，服务会读取当前年份 CSV；如果新年 CSV 不存在，会自动创建；然后从最后一条数据之后开始抓取到当天，写入原目录结构并重建年度 CSV。
 
-<img width="831" alt="image" src="https://github.com/making/usd-to-jpy/assets/106908/1eeaeaf5-bb3e-4875-8c76-eabf812d6e7e">
+页面“导出 CSV”同样会补齐该年份内没有汇率的日期，方便后续表格分析。
 
+趋势曲线支持鼠标滚轮缩放时间轴、拖拽平移时间范围，并可通过“重置时间轴”恢复全量视图。
 
-## OpenAPI Spec
+## 命令行
 
-* [Swagger UI](https://petstore.swagger.io/?url=https://raw.githubusercontent.com/making/usd-to-jpy/main/openapi.yaml)
-* [Redoc](https://redocly.github.io/redoc/?url=https://raw.githubusercontent.com/making/usd-to-jpy/main/openapi.yaml)
+从现有目录结构生成 2026 CSV：
+
+```bash
+python3 scripts/fx_rates.py build-csv --year 2026
+```
+
+更新缺失数据：
+
+```bash
+python3 scripts/fx_rates.py update --start 2026-01-01
+```
+
+查看摘要：
+
+```bash
+python3 scripts/fx_rates.py summary --year 2026
+```
+
+## 数据修正日志
+
+页面上的“修改”入口会同时更新目录文件和年度 CSV，并把修正记录追加到：
+
+```text
+logs/corrections.jsonl
+```
