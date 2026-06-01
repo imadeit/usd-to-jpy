@@ -1,0 +1,6 @@
+# OS/editor files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo

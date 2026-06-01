@@ -13,6 +13,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Callable, Iterable
 from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
 
@@ -75,6 +76,15 @@ def murc_url(day: date) -> str:
     return MURC_URL_TEMPLATE.format(yymmdd=yymmdd(day))
 
 
+def is_weekend(day: date) -> bool:
+    return day.weekday() >= 5
+
+
+def is_expected_murc_response(final_url: str, day: date) -> bool:
+    parsed = urlparse(final_url)
+    return parsed.path.endswith("/fx/past/index.php") and parse_qs(parsed.query).get("id") == [yymmdd(day)]
+
+
 def date_dir(root: Path, day: date) -> Path:
     return root / f"{day.year:04d}" / f"{day.month:02d}" / f"{day.day:02d}"
 
@@ -98,6 +108,8 @@ def daterange(start: date, end: date) -> Iterable[date]:
 
 
 def read_rate_from_dir(root: Path, day: date) -> Rate | None:
+    if is_weekend(day):
+        return None
     folder = date_dir(root, day)
     try:
         ttb = decimal_text((folder / "TTB").read_text(encoding="utf-8").strip())
@@ -205,17 +217,22 @@ def parse_murc_html(day: date, html: str) -> Rate | None:
 
 
 def fetch_rate(day: date, timeout: float = 12.0) -> Rate | None:
+    if is_weekend(day):
+        return None
     request = Request(murc_url(day), headers={"User-Agent": USER_AGENT})
     try:
         with urlopen(request, timeout=timeout) as response:
             raw = response.read()
-            charset = response.headers.get_content_charset() or "utf-8"
+            charset = response.headers.get_content_charset() or "cp932"
+            final_url = response.url
     except HTTPError as exc:
         if exc.code in {404, 410}:
             return None
         raise RuntimeError(f"HTTP {exc.code} while fetching {murc_url(day)}") from exc
     except URLError as exc:
         raise RuntimeError(f"Network error while fetching {murc_url(day)}: {exc.reason}") from exc
+    if not is_expected_murc_response(final_url, day):
+        return None
     html = raw.decode(charset, errors="ignore")
     return parse_murc_html(day, html)
 
@@ -242,6 +259,13 @@ def sync_range(
         event = {"index": index, "total": len(days), "date": day.isoformat(), "status": "checking"}
         if progress:
             progress(event)
+
+        if is_weekend(day):
+            stats["skipped"] += 1
+            event.update({"status": "skipped", "message": "周末没有发布汇率数据"})
+            if progress:
+                progress(event)
+            continue
 
         if not force and read_rate_from_dir(root, day):
             stats["existing"] += 1

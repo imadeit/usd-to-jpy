@@ -143,6 +143,12 @@ function parseLocalDate(dateText) {
   return new Date(year, month - 1, day);
 }
 
+function weekdayText(dateText) {
+  const date = parseLocalDate(dateText);
+  if (Number.isNaN(date.getTime())) return "--";
+  return ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][date.getDay()];
+}
+
 function addDays(date, days) {
   const next = new Date(date);
   next.setDate(next.getDate() + days);
@@ -583,7 +589,7 @@ function roundRect(ctx, x, y, width, height, radius) {
 
 function renderTable() {
   if (!state.rows.length) {
-    els.table.innerHTML = `<tr><td class="empty-row" colspan="6">没有数据。请先生成年度 CSV 或启动本地服务更新。</td></tr>`;
+    els.table.innerHTML = `<tr><td class="empty-row" colspan="7">没有数据。请先生成年度 CSV 或启动本地服务更新。</td></tr>`;
     return;
   }
   els.table.innerHTML = state.rows
@@ -593,6 +599,7 @@ function renderTable() {
       (row) => `
         <tr>
           <td>${escapeHtml(row.date)}</td>
+          <td>${escapeHtml(weekdayText(row.date))}</td>
           <td>${numberText(row.ttb)}</td>
           <td>${numberText(row.ttm)}</td>
           <td>${numberText(row.tts)}</td>
