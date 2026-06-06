@@ -5,6 +5,7 @@ import argparse
 import csv
 import json
 import re
+import ssl
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -23,6 +24,7 @@ CSV_COLUMNS = ["日期", "TTB", "TTM", "TTS", "URL"]
 MURC_URL_TEMPLATE = "https://www.murc-kawasesouba.jp/fx/past/index.php?id={yymmdd}"
 MIZUHO_URL_TEMPLATE = "https://www.mizuhobank.co.jp/market/historical/backnumber_b/pdf/fx-quotation{yymmdd}.pdf"
 USER_AGENT = "usd-to-jpy-local-updater/1.0"
+SYSTEM_CA_BUNDLE = Path("/etc/ssl/cert.pem")
 
 
 @dataclass(frozen=True)
@@ -80,9 +82,86 @@ def is_weekend(day: date) -> bool:
     return day.weekday() >= 5
 
 
+def nth_weekday(year: int, month: int, weekday: int, nth: int) -> date:
+    current = date(year, month, 1)
+    offset = (weekday - current.weekday()) % 7
+    return current + timedelta(days=offset + 7 * (nth - 1))
+
+
+def equinox_day(year: int, spring: bool) -> date:
+    if spring:
+        day = int(20.8431 + 0.242194 * (year - 1980) - (year - 1980) // 4)
+        return date(year, 3, day)
+    day = int(23.2488 + 0.242194 * (year - 1980) - (year - 1980) // 4)
+    return date(year, 9, day)
+
+
+def japanese_public_holidays(year: int) -> set[date]:
+    holidays = {
+        date(year, 1, 1),
+        nth_weekday(year, 1, 0, 2),
+        date(year, 2, 11),
+        date(year, 2, 23),
+        equinox_day(year, spring=True),
+        date(year, 4, 29),
+        date(year, 5, 3),
+        date(year, 5, 4),
+        date(year, 5, 5),
+        nth_weekday(year, 7, 0, 3),
+        date(year, 8, 11),
+        nth_weekday(year, 9, 0, 3),
+        equinox_day(year, spring=False),
+        nth_weekday(year, 10, 0, 2),
+        date(year, 11, 3),
+        date(year, 11, 23),
+    }
+    for holiday in sorted(list(holidays)):
+        if holiday.weekday() == 6:
+            substitute = holiday + timedelta(days=1)
+            while substitute in holidays:
+                substitute += timedelta(days=1)
+            holidays.add(substitute)
+    current = date(year, 1, 2)
+    while current < date(year, 12, 31):
+        if current.weekday() < 5 and current not in holidays and current - timedelta(days=1) in holidays and current + timedelta(days=1) in holidays:
+            holidays.add(current)
+        current += timedelta(days=1)
+    return holidays
+
+
+def is_non_business_day(day: date) -> bool:
+    bank_closure = (day.month, day.day) in {(1, 2), (1, 3), (12, 31)}
+    return is_weekend(day) or bank_closure or day in japanese_public_holidays(day.year)
+
+
+def latest_publishable_day(today: date | None = None) -> date:
+    current = today or date.today()
+    while is_non_business_day(current):
+        current -= timedelta(days=1)
+    return current
+
+
 def is_expected_murc_response(final_url: str, day: date) -> bool:
     parsed = urlparse(final_url)
-    return parsed.path.endswith("/fx/past/index.php") and parse_qs(parsed.query).get("id") == [yymmdd(day)]
+    if parsed.path.endswith("/fx/past/index.php") and parse_qs(parsed.query).get("id") == [yymmdd(day)]:
+        return True
+    return parsed.path.endswith("/fx/index.php") and day == latest_publishable_day()
+
+
+def ssl_context() -> ssl.SSLContext | None:
+    default_ca = ssl.get_default_verify_paths().openssl_cafile
+    if default_ca and Path(default_ca).exists():
+        return None
+    if SYSTEM_CA_BUNDLE.exists():
+        return ssl.create_default_context(cafile=str(SYSTEM_CA_BUNDLE))
+    return None
+
+
+def secure_urlopen(request: Request, timeout: float):
+    context = ssl_context()
+    if context is None:
+        return urlopen(request, timeout=timeout)
+    return urlopen(request, timeout=timeout, context=context)
 
 
 def date_dir(root: Path, day: date) -> Path:
@@ -108,7 +187,7 @@ def daterange(start: date, end: date) -> Iterable[date]:
 
 
 def read_rate_from_dir(root: Path, day: date) -> Rate | None:
-    if is_weekend(day):
+    if is_non_business_day(day):
         return None
     folder = date_dir(root, day)
     try:
@@ -217,11 +296,11 @@ def parse_murc_html(day: date, html: str) -> Rate | None:
 
 
 def fetch_rate(day: date, timeout: float = 12.0) -> Rate | None:
-    if is_weekend(day):
+    if is_non_business_day(day):
         return None
     request = Request(murc_url(day), headers={"User-Agent": USER_AGENT})
     try:
-        with urlopen(request, timeout=timeout) as response:
+        with secure_urlopen(request, timeout=timeout) as response:
             raw = response.read()
             charset = response.headers.get_content_charset() or "cp932"
             final_url = response.url
@@ -260,9 +339,9 @@ def sync_range(
         if progress:
             progress(event)
 
-        if is_weekend(day):
+        if is_non_business_day(day):
             stats["skipped"] += 1
-            event.update({"status": "skipped", "message": "周末没有发布汇率数据"})
+            event.update({"status": "skipped", "message": "非营业日没有发布汇率数据"})
             if progress:
                 progress(event)
             continue
