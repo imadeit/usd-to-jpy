@@ -13,7 +13,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from scripts import fx_rates
+from scripts import fx_rates, gold_prices
 
 
 ROOT = Path(__file__).resolve().parent
@@ -92,6 +92,40 @@ def all_rates_payload() -> dict:
     }
 
 
+def gold_payload(year: int) -> dict:
+    rows = [price.to_json() for price in gold_prices.read_year_csv(ROOT, year)]
+    csv_path = gold_prices.year_csv_path(ROOT, year)
+    return {
+        "ok": True,
+        "year": year,
+        "csvPath": str(csv_path.relative_to(ROOT)),
+        "rows": rows,
+        "stats": {
+            "count": len(rows),
+            "first": rows[0]["date"] if rows else None,
+            "last": rows[-1]["date"] if rows else None,
+        },
+    }
+
+
+def all_gold_payload() -> dict:
+    rows = [price.to_json() for price in gold_prices.read_all_csv(ROOT)]
+    years = gold_prices.available_years(ROOT)
+    csv_path = gold_prices.all_csv_path(ROOT)
+    return {
+        "ok": True,
+        "scope": "all",
+        "years": years,
+        "csvPath": str(csv_path.relative_to(ROOT)),
+        "rows": rows,
+        "stats": {
+            "count": len(rows),
+            "first": rows[0]["date"] if rows else None,
+            "last": rows[-1]["date"] if rows else None,
+        },
+    }
+
+
 def update_job(job_id: str, changes: dict) -> None:
     with JOBS_LOCK:
         job = JOBS[job_id]
@@ -156,6 +190,47 @@ def run_update(job_id: str, year: int | None, end_text: str | None) -> None:
         update_job(job_id, {"status": "error", "message": str(exc), "progress": 100})
 
 
+def run_gold_update(job_id: str, year: int | None, end_text: str | None, full_history: bool) -> None:
+    try:
+        today = date.today()
+        end = gold_prices.parse_day(end_text) if end_text else today
+        latest = None if full_history else gold_prices.latest_price_date(ROOT)
+        if year and not full_history:
+            existing = gold_prices.read_year_csv(ROOT, year)
+            latest = existing[-1].day if existing else None
+            end = min(end, date(year, 12, 31)) if year != today.year else min(end, today)
+        start = gold_prices.START_DATE if latest is None else latest + timedelta(days=1)
+        if year and not full_history:
+            start = max(start, date(year, 1, 1))
+        if start > end:
+            start = end
+
+        update_job(
+            job_id,
+            {
+                "status": "running",
+                "year": year,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "message": "正在检查黄金价格可更新范围...",
+            },
+        )
+        stats = gold_prices.sync_range(ROOT, start, end, progress=lambda event: add_job_event(job_id, event))
+        payload = all_gold_payload() if full_history or year is None else gold_payload(year)
+        update_job(
+            job_id,
+            {
+                "status": "done",
+                "progress": 100,
+                "message": f"黄金数据更新完成：下载 {stats['downloaded']} 条，当前保存 {stats['stored']} 条。",
+                "result": stats,
+                "gold": payload,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - report datasource failures to the local UI.
+        update_job(job_id, {"status": "error", "message": str(exc), "progress": 100})
+
+
 class RateHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT), **kwargs)
@@ -179,6 +254,15 @@ class RateHandler(SimpleHTTPRequestHandler):
 
         if parsed.path == "/api/years":
             json_response(self, {"ok": True, "years": available_years()})
+            return
+
+        if parsed.path == "/api/gold":
+            params = parse_qs(parsed.query)
+            if (params.get("scope") or [""])[0] == "all":
+                json_response(self, all_gold_payload())
+                return
+            year = int((params.get("year") or [str(date.today().year)])[0])
+            json_response(self, gold_payload(year))
             return
 
         if parsed.path == "/api/corrections":
@@ -220,6 +304,25 @@ class RateHandler(SimpleHTTPRequestHandler):
                     "message": "等待开始...",
                 }
             thread = threading.Thread(target=run_update, args=(job_id, year, payload.get("end")), daemon=True)
+            thread.start()
+            json_response(self, {"ok": True, "job": JOBS[job_id]})
+            return
+
+        if parsed.path == "/api/gold/update":
+            job_id = uuid.uuid4().hex[:12]
+            year = int(payload["year"]) if payload.get("year") else None
+            full_history = bool(payload.get("fullHistory"))
+            with JOBS_LOCK:
+                JOBS[job_id] = {
+                    "id": job_id,
+                    "status": "queued",
+                    "progress": 0,
+                    "events": [],
+                    "createdAt": datetime.now(timezone.utc).isoformat(),
+                    "updatedAt": datetime.now(timezone.utc).isoformat(),
+                    "message": "等待开始...",
+                }
+            thread = threading.Thread(target=run_gold_update, args=(job_id, year, payload.get("end"), full_history), daemon=True)
             thread.start()
             json_response(self, {"ok": True, "job": JOBS[job_id]})
             return

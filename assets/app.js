@@ -1,23 +1,34 @@
-const currentYear = new Date().getFullYear();
+const initialYearInput = document.querySelector("#year-input");
+const currentYear = Math.max(new Date().getFullYear(), Number(initialYearInput?.value || 0));
+const TROY_OUNCE_GRAMS = 31.1034768;
 
 const state = {
   rows: [],
   corrections: [],
+  goldRows: [],
   dataScope: "year",
   granularity: "day",
+  goldGranularity: "day",
   year: currentYear,
   availableYears: [],
+  goldAvailableYears: [],
   apiAvailable: false,
+  goldApiAvailable: false,
   csvPath: "",
+  goldCsvPath: "",
   visibleSeries: {
     ttb: true,
     ttm: true,
     tts: true,
   },
   hoverIndex: null,
+  goldHoverIndex: null,
   chartMeta: null,
+  goldChartMeta: null,
   viewport: { start: 0, end: 1 },
+  goldViewport: { start: 0, end: 1 },
   drag: null,
+  goldDrag: null,
 };
 
 const els = {
@@ -25,8 +36,10 @@ const els = {
   latestRate: document.querySelector("#latest-rate"),
   latestDate: document.querySelector("#latest-date"),
   refreshButton: document.querySelector("#refresh-button"),
+  refreshGoldButton: document.querySelector("#refresh-gold-button"),
   reloadButton: document.querySelector("#reload-button"),
   exportButton: document.querySelector("#export-button"),
+  exportGoldButton: document.querySelector("#export-gold-button"),
   scopeButtons: document.querySelectorAll("[data-scope]"),
   progressCard: document.querySelector("#progress-card"),
   progressTitle: document.querySelector("#progress-title"),
@@ -41,6 +54,16 @@ const els = {
   canvas: document.querySelector("#rate-chart"),
   resetZoomButton: document.querySelector("#reset-zoom-button"),
   seriesButtons: document.querySelectorAll("[data-series]"),
+  goldMetricCount: document.querySelector("#gold-metric-count"),
+  goldMetricRange: document.querySelector("#gold-metric-range"),
+  goldMetricHigh: document.querySelector("#gold-metric-high"),
+  goldLatestPrice: document.querySelector("#gold-latest-price"),
+  goldLatestYenGram: document.querySelector("#gold-latest-yen-gram"),
+  goldChartSubtitle: document.querySelector("#gold-chart-subtitle"),
+  goldCanvas: document.querySelector("#gold-chart"),
+  goldResetZoomButton: document.querySelector("#gold-reset-zoom-button"),
+  goldTable: document.querySelector("#gold-table"),
+  goldDataSource: document.querySelector("#gold-data-source"),
   table: document.querySelector("#rate-table"),
   dataSource: document.querySelector("#data-source"),
   editCard: document.querySelector("#edit-card"),
@@ -66,6 +89,11 @@ function escapeHtml(value) {
 function numberText(value) {
   if (!Number.isFinite(value)) return "--";
   return value.toFixed(2);
+}
+
+function yenText(value) {
+  if (!Number.isFinite(value)) return "--";
+  return Math.round(value).toLocaleString();
 }
 
 function clamp(value, min, max) {
@@ -120,6 +148,28 @@ function normalizeRow(row) {
   };
 }
 
+function parseGoldCsv(text) {
+  const lines = text.trim().split(/\r?\n/).filter(Boolean);
+  if (!lines.length) return [];
+  const headers = splitCsvLine(lines[0]);
+  return lines.slice(1).map((line) => {
+    const cells = splitCsvLine(line);
+    const row = Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ""]));
+    return normalizeGoldRow(row);
+  }).filter(Boolean);
+}
+
+function normalizeGoldRow(row) {
+  const date = row.date || row.Date || row["日期"];
+  const price = parseRateValue(row.price ?? row.Price ?? row["价格"] ?? row.close ?? row.Close ?? row["收盘"]);
+  if (!date || !Number.isFinite(price)) return null;
+  return {
+    date,
+    price,
+    url: row.url || row.URL || "https://www.lbma.org.uk/prices-and-data/precious-metal-prices#/table",
+  };
+}
+
 function parseRateValue(value) {
   const text = String(value ?? "").trim();
   if (!text) return Number.NaN;
@@ -164,9 +214,11 @@ async function loadData() {
   state.year = Number(els.yearInput.value || 2026);
   if (state.dataScope === "all") {
     await loadAllData();
+    await loadAllGoldData();
     return;
   }
   await loadYearData();
+  await loadGoldYearData();
 }
 
 async function loadYearData() {
@@ -249,10 +301,86 @@ async function loadAllData() {
   render();
 }
 
+async function loadGoldYearData() {
+  els.goldDataSource.textContent = "正在载入黄金价格...";
+  try {
+    const response = await fetch(`./api/gold?year=${state.year}`, { cache: "no-store" });
+    if (!response.ok) throw new Error("local api unavailable");
+    const payload = await response.json();
+    if (!payload.ok) throw new Error(payload.error || "API 返回失败");
+    state.goldRows = payload.rows.map(normalizeGoldRow).filter(Boolean);
+    state.goldApiAvailable = true;
+    state.goldCsvPath = payload.csvPath;
+    els.refreshGoldButton.disabled = false;
+    els.goldDataSource.textContent = `本地服务模式 · ${payload.csvPath}`;
+  } catch {
+    const csvPath = `./gold/gold-usd-${state.year}.csv`;
+    try {
+      const response = await fetch(csvPath, { cache: "no-store" });
+      if (!response.ok) throw new Error(`找不到 ${csvPath}`);
+      state.goldRows = parseGoldCsv(await response.text());
+      state.goldApiAvailable = false;
+      state.goldCsvPath = csvPath;
+      els.refreshGoldButton.disabled = true;
+      els.goldDataSource.textContent = `静态模式 · ${csvPath} · 启动 python3 server.py 后可更新黄金价格`;
+    } catch (error) {
+      state.goldRows = [];
+      state.goldApiAvailable = false;
+      els.refreshGoldButton.disabled = true;
+      els.goldDataSource.textContent = `黄金数据载入失败：${error.message}`;
+    }
+  }
+  state.goldRows.sort((left, right) => left.date.localeCompare(right.date));
+  resetGoldViewport();
+  renderGold();
+}
+
+async function loadAllGoldData() {
+  els.goldDataSource.textContent = "正在载入全部黄金历史...";
+  try {
+    const response = await fetch("./api/gold?scope=all", { cache: "no-store" });
+    if (!response.ok) throw new Error("local api unavailable");
+    const payload = await response.json();
+    if (!payload.ok) throw new Error(payload.error || "API 返回失败");
+    state.goldRows = payload.rows.map(normalizeGoldRow).filter(Boolean);
+    state.goldAvailableYears = payload.years || [];
+    state.goldApiAvailable = true;
+    state.goldCsvPath = payload.csvPath;
+    els.refreshGoldButton.disabled = false;
+    els.goldDataSource.textContent = `本地服务模式 · 全部黄金历史 · ${payload.stats.count.toLocaleString()} 条`;
+  } catch {
+    const csvPath = "./gold/gold-usd-all.csv";
+    try {
+      const response = await fetch(csvPath, { cache: "no-store" });
+      if (!response.ok) throw new Error(`找不到 ${csvPath}`);
+      state.goldRows = parseGoldCsv(await response.text());
+      state.goldApiAvailable = false;
+      state.goldCsvPath = csvPath;
+      els.refreshGoldButton.disabled = true;
+      els.goldDataSource.textContent = `静态模式 · 全部黄金历史 · 启动 python3 server.py 后可更新`;
+    } catch (error) {
+      state.goldRows = [];
+      state.goldAvailableYears = [];
+      state.goldApiAvailable = false;
+      els.refreshGoldButton.disabled = true;
+      els.goldDataSource.textContent = `黄金数据载入失败：${error.message}`;
+    }
+  }
+  state.goldRows.sort((left, right) => left.date.localeCompare(right.date));
+  resetGoldViewport();
+  renderGold();
+}
+
 function resetViewport() {
   state.hoverIndex = null;
   state.viewport = { start: 0, end: 1 };
   state.drag = null;
+}
+
+function resetGoldViewport() {
+  state.goldHoverIndex = null;
+  state.goldViewport = { start: 0, end: 1 };
+  state.goldDrag = null;
 }
 
 function aggregateRows(rows, granularity) {
@@ -310,6 +438,391 @@ function renderSummary() {
   els.metricRange.textContent = `${rows[0].date} ~ ${latest.date}`;
   els.metricHigh.textContent = `${numberText(high.ttm)} · ${high.date}`;
   els.metricLow.textContent = `${numberText(low.ttm)} · ${low.date}`;
+}
+
+function renderGold() {
+  renderGoldSummary();
+  renderGoldChart();
+  renderGoldTable();
+}
+
+function renderGoldSummary() {
+  const rows = state.goldRows;
+  els.goldMetricCount.textContent = rows.length.toLocaleString();
+  if (!rows.length) {
+    els.goldMetricRange.textContent = "--";
+    els.goldLatestPrice.textContent = "--";
+    els.goldMetricHigh.textContent = "--";
+    els.goldLatestYenGram.textContent = "--";
+    return;
+  }
+  const enriched = goldRowsWithYen();
+  const latest = enriched.at(-1);
+  const high = enriched.reduce((best, row) => (row.price > best.price ? row : best), enriched[0]);
+  const latestYen = enriched.slice().reverse().find((row) => Number.isFinite(row.yenPerGram));
+  els.goldMetricRange.textContent = `${rows[0].date} ~ ${latest.date}`;
+  els.goldLatestPrice.textContent = `${numberText(latest.price)} · ${latest.date}`;
+  els.goldMetricHigh.textContent = `${numberText(high.price)} · ${high.date}`;
+  els.goldLatestYenGram.textContent = latestYen ? `${yenText(latestYen.yenPerGram)} · ${latestYen.date}` : "--";
+}
+
+function goldRowsWithYen() {
+  const rates = state.rows.slice().sort((left, right) => left.date.localeCompare(right.date));
+  let rateIndex = 0;
+  let activeRate = null;
+  return state.goldRows.map((row) => {
+    while (rateIndex < rates.length && rates[rateIndex].date <= row.date) {
+      activeRate = rates[rateIndex];
+      rateIndex += 1;
+    }
+    const yenPerGram = activeRate ? (row.price * activeRate.ttm) / TROY_OUNCE_GRAMS : null;
+    return {
+      ...row,
+      high: row.price,
+      low: row.price,
+      yenPerGram,
+      fxDate: activeRate ? activeRate.date : null,
+      fxTtm: activeRate ? activeRate.ttm : null,
+    };
+  });
+}
+
+function aggregateGoldRows(rows, granularity) {
+  if (granularity === "day") return rows.map((row) => ({ ...row, label: row.date, high: row.price, low: row.price, count: 1 }));
+  const groups = new Map();
+  for (const row of rows) {
+    const key = granularity === "week" ? weekKey(row.date) : row.date.slice(0, 7);
+    const group = groups.get(key) || {
+      label: key,
+      price: 0,
+      high: -Infinity,
+      low: Infinity,
+      yenPerGram: 0,
+      yenCount: 0,
+      fxDate: null,
+      fxTtm: null,
+      count: 0,
+      date: key,
+    };
+    group.price += row.price;
+    group.high = Math.max(group.high, row.price);
+    group.low = Math.min(group.low, row.price);
+    if (Number.isFinite(row.yenPerGram)) {
+      group.yenPerGram += row.yenPerGram;
+      group.yenCount += 1;
+      group.fxDate = row.fxDate;
+      group.fxTtm = row.fxTtm;
+    }
+    group.count += 1;
+    groups.set(key, group);
+  }
+  return [...groups.values()].map((group) => ({
+    ...group,
+    price: group.price / group.count,
+    yenPerGram: group.yenCount ? group.yenPerGram / group.yenCount : null,
+  }));
+}
+
+function renderGoldChart() {
+  const allPoints = aggregateGoldRows(goldRowsWithYen(), state.goldGranularity);
+  const windowed = goldChartWindow(allPoints);
+  const points = windowed.points;
+  const labels = { day: "每日 PM Fix 价格", week: "周平均 PM Fix 价格", month: "月平均 PM Fix 价格" };
+  const rangeText = points.length ? ` · ${points[0].label} ~ ${points.at(-1).label}` : "";
+  const windowText = allPoints.length && points.length < allPoints.length ? ` · 显示 ${points.length}/${allPoints.length} 个点` : ` · ${points.length} 个点`;
+  const yenCount = points.filter((point) => Number.isFinite(point.yenPerGram)).length;
+  const yenTextPart = yenCount ? ` · 日元/克 ${yenCount} 点` : " · 等待 USD/JPY 数据折算日元/克";
+  els.goldChartSubtitle.textContent = `${labels[state.goldGranularity]}${windowText}${rangeText}${yenTextPart}`;
+  state.goldChartMeta = null;
+
+  const canvas = els.goldCanvas;
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(640, rect.width) * dpr;
+  const height = 320 * dpr;
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(dpr, dpr);
+
+  const cssWidth = width / dpr;
+  const cssHeight = height / dpr;
+  ctx.clearRect(0, 0, cssWidth, cssHeight);
+  ctx.fillStyle = "rgba(255,255,255,0.56)";
+  ctx.fillRect(0, 0, cssWidth, cssHeight);
+
+  if (points.length < 2) {
+    ctx.fillStyle = "#6c7782";
+    ctx.font = "16px Avenir Next";
+    ctx.fillText("黄金数据不足，点击“获取最新金价”下载历史。", 28, 42);
+    return;
+  }
+
+  const padding = { left: 68, right: 86, top: 24, bottom: 48 };
+  const values = points.map((point) => point.price);
+  const span = Math.max(...values) - Math.min(...values);
+  const min = Math.floor(Math.min(...values) - Math.max(10, span * 0.04));
+  const max = Math.ceil(Math.max(...values) + Math.max(10, span * 0.04));
+  const yenValues = points.map((point) => point.yenPerGram).filter(Number.isFinite);
+  const hasYenAxis = yenValues.length >= 2;
+  const yenSpan = hasYenAxis ? Math.max(...yenValues) - Math.min(...yenValues) : 0;
+  const yenMin = hasYenAxis ? Math.floor(Math.min(...yenValues) - Math.max(100, yenSpan * 0.04)) : 0;
+  const yenMax = hasYenAxis ? Math.ceil(Math.max(...yenValues) + Math.max(100, yenSpan * 0.04)) : 1;
+  const chartWidth = cssWidth - padding.left - padding.right;
+  const chartHeight = cssHeight - padding.top - padding.bottom;
+
+  const x = (index) => padding.left + (index / (points.length - 1)) * chartWidth;
+  const y = (value) => padding.top + (1 - (value - min) / (max - min)) * chartHeight;
+  const yYen = (value) => padding.top + (1 - (value - yenMin) / (yenMax - yenMin)) * chartHeight;
+
+  ctx.strokeStyle = "rgba(40,58,73,0.12)";
+  ctx.lineWidth = 1;
+  ctx.fillStyle = "#b97828";
+  ctx.font = "12px Avenir Next";
+  ctx.fillText("USD/oz", 10, padding.top - 7);
+  for (let step = 0; step <= 4; step += 1) {
+    const value = min + ((max - min) * step) / 4;
+    const yy = y(value);
+    ctx.beginPath();
+    ctx.moveTo(padding.left, yy);
+    ctx.lineTo(cssWidth - padding.right, yy);
+    ctx.stroke();
+    ctx.fillText(numberText(value), 10, yy + 4);
+  }
+
+  const yenColor = "#2a8f8a";
+  if (hasYenAxis) {
+    ctx.strokeStyle = "rgba(42, 143, 138, 0.32)";
+    ctx.beginPath();
+    ctx.moveTo(cssWidth - padding.right, padding.top);
+    ctx.lineTo(cssWidth - padding.right, cssHeight - padding.bottom);
+    ctx.stroke();
+    ctx.fillStyle = yenColor;
+    ctx.fillText("JPY/g", cssWidth - padding.right + 12, padding.top - 7);
+    for (let step = 0; step <= 4; step += 1) {
+      const value = yenMin + ((yenMax - yenMin) * step) / 4;
+      const yy = yYen(value);
+      ctx.fillText(yenText(value), cssWidth - padding.right + 12, yy + 4);
+    }
+  }
+
+  const meta = { points, allPoints, padding, cssWidth, cssHeight, chartWidth, chartHeight, x, y, yYen, hasYenAxis, yenColor, ...windowed };
+  state.goldChartMeta = meta;
+  drawGoldLine(ctx, points, x, y);
+  if (hasYenAxis) {
+    drawGoldYenLine(ctx, points, x, yYen, yenColor);
+  }
+  drawGoldExtremaMarkers(ctx, meta);
+
+  const labelCount = Math.min(6, points.length);
+  for (let index = 0; index < labelCount; index += 1) {
+    const pointIndex = Math.round((index / (labelCount - 1)) * (points.length - 1));
+    const point = points[pointIndex];
+    ctx.fillStyle = "#6c7782";
+    ctx.fillText(point.label, x(pointIndex) - 32, cssHeight - 18);
+  }
+
+  if (state.goldHoverIndex !== null) {
+    drawGoldHover(ctx, meta, state.goldHoverIndex);
+  }
+}
+
+function drawGoldLine(ctx, points, x, y) {
+  ctx.strokeStyle = "#b97828";
+  ctx.lineWidth = 3.2;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  points.forEach((point, index) => {
+    const xx = x(index);
+    const yy = y(point.price);
+    if (index === 0) ctx.moveTo(xx, yy);
+    else ctx.lineTo(xx, yy);
+  });
+  ctx.stroke();
+}
+
+function drawGoldYenLine(ctx, points, x, yYen, color) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2.8;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  let started = false;
+  points.forEach((point, index) => {
+    if (!Number.isFinite(point.yenPerGram)) {
+      started = false;
+      return;
+    }
+    const xx = x(index);
+    const yy = yYen(point.yenPerGram);
+    if (!started) {
+      ctx.moveTo(xx, yy);
+      started = true;
+    } else {
+      ctx.lineTo(xx, yy);
+    }
+  });
+  ctx.stroke();
+}
+
+function goldChartWindow(allPoints) {
+  if (allPoints.length <= 1) {
+    return { points: allPoints, startIndex: 0, endIndex: Math.max(0, allPoints.length - 1), total: allPoints.length };
+  }
+  const total = allPoints.length;
+  const startIndex = clamp(Math.floor(state.goldViewport.start * (total - 1)), 0, total - 2);
+  const endIndex = clamp(Math.ceil(state.goldViewport.end * (total - 1)), startIndex + 1, total - 1);
+  return {
+    points: allPoints.slice(startIndex, endIndex + 1),
+    startIndex,
+    endIndex,
+    total,
+  };
+}
+
+function setGoldViewportIndices(total, startIndex, endIndex) {
+  if (total <= 1) {
+    state.goldViewport = { start: 0, end: 1 };
+    return;
+  }
+  const minWindow = Math.min(total - 1, 8);
+  let start = clamp(startIndex, 0, total - 1);
+  let end = clamp(endIndex, 0, total - 1);
+  if (end - start < minWindow) {
+    const center = (start + end) / 2;
+    start = center - minWindow / 2;
+    end = center + minWindow / 2;
+  }
+  if (start < 0) {
+    end -= start;
+    start = 0;
+  }
+  if (end > total - 1) {
+    start -= end - (total - 1);
+    end = total - 1;
+  }
+  start = clamp(start, 0, total - 1);
+  end = clamp(end, start + 1, total - 1);
+  state.goldViewport = {
+    start: start / (total - 1),
+    end: end / (total - 1),
+  };
+}
+
+function drawGoldExtremaMarkers(ctx, meta) {
+  const highIndex = meta.points.reduce((bestIndex, point, index) => (point.price > meta.points[bestIndex].price ? index : bestIndex), 0);
+  const lowIndex = meta.points.reduce((bestIndex, point, index) => (point.price < meta.points[bestIndex].price ? index : bestIndex), 0);
+  drawGoldMarker(ctx, meta, highIndex, "最高价格", "#a94f45", "above");
+  if (lowIndex !== highIndex) {
+    drawGoldMarker(ctx, meta, lowIndex, "最低价格", "#23715d", "below");
+  }
+}
+
+function drawGoldMarker(ctx, meta, index, title, color, preferredSide) {
+  const point = meta.points[index];
+  const xx = meta.x(index);
+  const yy = meta.y(point.price);
+  const chartRight = meta.cssWidth - meta.padding.right;
+  const chartBottom = meta.cssHeight - meta.padding.bottom;
+
+  ctx.save();
+  ctx.setLineDash([6, 6]);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.25;
+  ctx.beginPath();
+  ctx.moveTo(meta.padding.left, yy);
+  ctx.lineTo(chartRight, yy);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(xx, yy, 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.95)";
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+
+  const lines = [title, `${point.label} · ${numberText(point.price)}`];
+  ctx.font = "600 12px Avenir Next";
+  const width = Math.max(...lines.map((line) => ctx.measureText(line).width)) + 22;
+  const height = 44;
+  const labelX = Math.min(Math.max(xx + 12, 12), meta.cssWidth - width - 12);
+  const proposedY = preferredSide === "above" ? yy - height - 10 : yy + 10;
+  const labelY = Math.min(Math.max(proposedY, meta.padding.top + 6), chartBottom - height - 6);
+
+  ctx.fillStyle = "rgba(255, 252, 245, 0.94)";
+  roundRect(ctx, labelX, labelY, width, height, 13);
+  ctx.fill();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.fillStyle = color;
+  ctx.fillText(lines[0], labelX + 11, labelY + 18);
+  ctx.fillStyle = "#1b2733";
+  ctx.font = "12px Avenir Next";
+  ctx.fillText(lines[1], labelX + 11, labelY + 35);
+  ctx.restore();
+}
+
+function drawGoldHover(ctx, meta, index) {
+  const safeIndex = Math.max(0, Math.min(meta.points.length - 1, index));
+  const point = meta.points[safeIndex];
+  const xx = meta.x(safeIndex);
+
+  ctx.save();
+  ctx.strokeStyle = "rgba(27, 39, 51, 0.28)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(xx, meta.padding.top);
+  ctx.lineTo(xx, meta.cssHeight - meta.padding.bottom);
+  ctx.stroke();
+
+  ctx.fillStyle = "#b97828";
+  ctx.beginPath();
+  ctx.arc(xx, meta.y(point.price), 4.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.9)";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  if (meta.hasYenAxis && Number.isFinite(point.yenPerGram)) {
+    ctx.fillStyle = meta.yenColor;
+    ctx.beginPath();
+    ctx.arc(xx, meta.yYen(point.yenPerGram), 4.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.9)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  const lines = [
+    point.label,
+    `PM Fix: ${numberText(point.price)} USD/oz`,
+    Number.isFinite(point.yenPerGram) ? `日元/克: ${yenText(point.yenPerGram)} JPY/g` : "日元/克: --",
+    point.fxDate ? `TTM: ${numberText(point.fxTtm)} · ${point.fxDate}` : "TTM: --",
+    `区间最高: ${numberText(point.high)}`,
+    `区间最低: ${numberText(point.low)}`,
+  ];
+  ctx.font = "12px Avenir Next";
+  const width = Math.max(...lines.map((line) => ctx.measureText(line).width)) + 24;
+  const height = 22 + lines.length * 18;
+  const boxX = Math.min(Math.max(xx + 12, 12), meta.cssWidth - width - 12);
+  const boxY = Math.max(meta.padding.top + 6, Math.min(meta.y(point.price) - height / 2, meta.cssHeight - height - 16));
+
+  ctx.fillStyle = "rgba(27, 39, 51, 0.92)";
+  roundRect(ctx, boxX, boxY, width, height, 14);
+  ctx.fill();
+  ctx.fillStyle = "#fffaf2";
+  ctx.font = "600 12px Avenir Next";
+  ctx.fillText(lines[0], boxX + 12, boxY + 20);
+  ctx.font = "12px Avenir Next";
+  lines.slice(1).forEach((line, lineIndex) => {
+    ctx.fillText(line, boxX + 12, boxY + 40 + lineIndex * 18);
+  });
+  ctx.restore();
 }
 
 function renderChart() {
@@ -614,6 +1127,27 @@ function renderTable() {
   });
 }
 
+function renderGoldTable() {
+  if (!state.goldRows.length) {
+    els.goldTable.innerHTML = `<tr><td class="empty-row" colspan="4">没有黄金数据。点击“获取最新金价”下载历史和最新报价。</td></tr>`;
+    return;
+  }
+  els.goldTable.innerHTML = state.goldRows
+    .slice()
+    .reverse()
+    .map(
+      (row) => `
+        <tr>
+          <td>${escapeHtml(row.date)}</td>
+          <td>${escapeHtml(weekdayText(row.date))}</td>
+          <td>${numberText(row.price)}</td>
+          <td><a href="${escapeHtml(row.url)}" target="_blank" rel="noreferrer">LBMA</a></td>
+        </tr>
+      `,
+    )
+    .join("");
+}
+
 function renderCorrections() {
   if (!state.corrections.length) {
     els.correctionLog.textContent = "还没有修正记录。";
@@ -715,6 +1249,55 @@ async function pollUpdate(jobId) {
   window.setTimeout(() => pollUpdate(jobId), 600);
 }
 
+async function startGoldUpdate() {
+  if (!state.goldApiAvailable) {
+    alert("静态展示模式无法写入黄金数据。请在项目目录运行 python3 server.py 后再点击获取最新金价。");
+    return;
+  }
+  els.progressCard.hidden = false;
+  setProgress(0, "正在启动黄金价格更新任务...", "正在更新黄金价格...");
+  els.refreshGoldButton.disabled = true;
+  const response = await fetch("./api/gold/update", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      year: state.dataScope === "all" ? null : Number(els.yearInput.value || currentYear),
+      fullHistory: state.dataScope === "all" || !state.goldRows.length,
+    }),
+  });
+  const payload = await response.json();
+  if (!response.ok || !payload.ok) {
+    setProgress(100, payload.error || "黄金更新任务启动失败", "黄金更新失败");
+    els.refreshGoldButton.disabled = false;
+    return;
+  }
+  pollGoldUpdate(payload.job.id);
+}
+
+async function pollGoldUpdate(jobId) {
+  const response = await fetch(`./api/update-status?id=${encodeURIComponent(jobId)}`, { cache: "no-store" });
+  const payload = await response.json();
+  if (!response.ok || !payload.ok) {
+    setProgress(100, payload.error || "无法读取黄金更新进度", "黄金更新失败");
+    els.refreshGoldButton.disabled = false;
+    return;
+  }
+  const job = payload.job;
+  setProgress(job.progress || 0, job.message || "黄金更新中...", job.status === "done" ? "黄金更新完成" : "正在更新黄金价格...");
+  if (job.status === "done") {
+    els.refreshGoldButton.disabled = false;
+    if (state.dataScope === "all") await loadAllGoldData();
+    else await loadGoldYearData();
+    return;
+  }
+  if (job.status === "error") {
+    els.refreshGoldButton.disabled = false;
+    setProgress(100, job.message || "黄金更新失败", "黄金更新失败");
+    return;
+  }
+  window.setTimeout(() => pollGoldUpdate(jobId), 600);
+}
+
 function setProgress(percent, message, title) {
   els.progressTitle.textContent = title;
   els.progressPercent.textContent = `${Math.round(percent)}%`;
@@ -730,6 +1313,18 @@ function exportCsv() {
   const link = document.createElement("a");
   link.href = url;
   link.download = state.dataScope === "all" ? "usd-jpy-all.csv" : `usd-jpy-${state.year}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportGoldCsv() {
+  const headers = ["日期", "价格", "URL"];
+  const body = state.goldRows.map((row) => [row.date, row.price, row.url].map(csvCell).join(","));
+  const blob = new Blob([[headers.join(","), ...body].join("\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = state.dataScope === "all" ? "gold-usd-all.csv" : `gold-usd-${state.year}.csv`;
   link.click();
   URL.revokeObjectURL(url);
 }
@@ -782,10 +1377,24 @@ document.querySelectorAll("[data-granularity]").forEach((button) => {
   });
 });
 
+document.querySelectorAll("[data-gold-granularity]").forEach((button) => {
+  button.addEventListener("click", () => {
+    state.goldGranularity = button.dataset.goldGranularity;
+    document.querySelectorAll("[data-gold-granularity]").forEach((node) => node.classList.toggle("is-active", node === button));
+    resetGoldViewport();
+    renderGoldChart();
+  });
+});
+
 els.scopeButtons.forEach((button) => {
   button.addEventListener("click", async () => {
     state.dataScope = button.dataset.scope;
+    if (state.dataScope === "year") {
+      els.yearInput.value = String(currentYear);
+      state.year = currentYear;
+    }
     resetViewport();
+    resetGoldViewport();
     updateScopeButtons();
     await loadData();
   });
@@ -862,9 +1471,14 @@ els.canvas.addEventListener("mousedown", (event) => {
 });
 
 window.addEventListener("mouseup", () => {
-  if (!state.drag) return;
-  state.drag = null;
-  els.canvas.classList.remove("is-panning");
+  if (state.drag) {
+    state.drag = null;
+    els.canvas.classList.remove("is-panning");
+  }
+  if (state.goldDrag) {
+    state.goldDrag = null;
+    els.goldCanvas.classList.remove("is-panning");
+  }
 });
 
 els.canvas.addEventListener("mouseleave", () => {
@@ -875,20 +1489,98 @@ els.canvas.addEventListener("mouseleave", () => {
   }
 });
 
+els.goldCanvas.addEventListener("mousemove", (event) => {
+  const meta = state.goldChartMeta;
+  if (!meta) return;
+  const rect = els.goldCanvas.getBoundingClientRect();
+  const mouseX = event.clientX - rect.left;
+  if (state.goldDrag) {
+    const deltaX = mouseX - state.goldDrag.mouseX;
+    const deltaPoints = -(deltaX / meta.chartWidth) * (state.goldDrag.endIndex - state.goldDrag.startIndex);
+    setGoldViewportIndices(meta.total, state.goldDrag.startIndex + deltaPoints, state.goldDrag.endIndex + deltaPoints);
+    state.goldHoverIndex = null;
+    renderGoldChart();
+    return;
+  }
+  if (mouseX < meta.padding.left || mouseX > meta.cssWidth - meta.padding.right) {
+    if (state.goldHoverIndex !== null) {
+      state.goldHoverIndex = null;
+      renderGoldChart();
+    }
+    return;
+  }
+  const index = Math.round(((mouseX - meta.padding.left) / meta.chartWidth) * (meta.points.length - 1));
+  if (index !== state.goldHoverIndex) {
+    state.goldHoverIndex = index;
+    renderGoldChart();
+  }
+});
+
+els.goldCanvas.addEventListener("wheel", (event) => {
+  const meta = state.goldChartMeta;
+  if (!meta || meta.total <= 2) return;
+  event.preventDefault();
+  const rect = els.goldCanvas.getBoundingClientRect();
+  const mouseX = clamp(event.clientX - rect.left, meta.padding.left, meta.cssWidth - meta.padding.right);
+  const focus = (mouseX - meta.padding.left) / meta.chartWidth;
+  const focusIndex = meta.startIndex + focus * (meta.endIndex - meta.startIndex);
+  const factor = event.deltaY < 0 ? 0.78 : 1.22;
+  const newStart = focusIndex - (focusIndex - meta.startIndex) * factor;
+  const newEnd = focusIndex + (meta.endIndex - focusIndex) * factor;
+  setGoldViewportIndices(meta.total, newStart, newEnd);
+  state.goldHoverIndex = null;
+  renderGoldChart();
+}, { passive: false });
+
+els.goldCanvas.addEventListener("mousedown", (event) => {
+  const meta = state.goldChartMeta;
+  if (!meta || meta.total <= meta.points.length) return;
+  const rect = els.goldCanvas.getBoundingClientRect();
+  const mouseX = event.clientX - rect.left;
+  const mouseY = event.clientY - rect.top;
+  if (mouseX < meta.padding.left || mouseX > meta.cssWidth - meta.padding.right || mouseY < meta.padding.top || mouseY > meta.cssHeight - meta.padding.bottom) {
+    return;
+  }
+  state.goldDrag = {
+    mouseX,
+    startIndex: meta.startIndex,
+    endIndex: meta.endIndex,
+  };
+  els.goldCanvas.classList.add("is-panning");
+});
+
+els.goldCanvas.addEventListener("mouseleave", () => {
+  if (state.goldDrag) return;
+  if (state.goldHoverIndex !== null) {
+    state.goldHoverIndex = null;
+    renderGoldChart();
+  }
+});
+
 els.resetZoomButton.addEventListener("click", () => {
   resetViewport();
   renderChart();
 });
 
+els.goldResetZoomButton.addEventListener("click", () => {
+  resetGoldViewport();
+  renderGoldChart();
+});
+
 els.yearInput.value = String(currentYear);
 els.yearInput.addEventListener("change", loadData);
 els.refreshButton.addEventListener("click", startUpdate);
+els.refreshGoldButton.addEventListener("click", startGoldUpdate);
 els.reloadButton.addEventListener("click", loadData);
 els.exportButton.addEventListener("click", exportCsv);
+els.exportGoldButton.addEventListener("click", exportGoldCsv);
 els.cancelEditButton.addEventListener("click", () => {
   els.editCard.hidden = true;
 });
 els.editForm.addEventListener("submit", submitCorrection);
-window.addEventListener("resize", () => renderChart());
+window.addEventListener("resize", () => {
+  renderChart();
+  renderGoldChart();
+});
 
 loadData();

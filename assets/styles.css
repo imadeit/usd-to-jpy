@@ -195,6 +195,10 @@ input {
   background: var(--blue-dark);
 }
 
+.button.is-gold {
+  background: var(--gold);
+}
+
 .button[disabled] {
   cursor: not-allowed;
   opacity: 0.56;
@@ -203,6 +207,7 @@ input {
 .progress-card,
 .chart-card,
 .data-card,
+.market-section,
 .edit-card,
 .log-card {
   margin-top: 18px;
@@ -244,10 +249,21 @@ input {
   margin-top: 18px;
 }
 
+.summary-grid.compact {
+  margin-top: 0;
+  margin-bottom: 18px;
+}
+
 .metric {
   flex: 1 1 170px;
   min-width: max-content;
   padding: 18px;
+}
+
+.summary-grid.compact .metric {
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.44);
 }
 
 .metric span {
@@ -274,6 +290,10 @@ input {
 .chart-tools {
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.nested-head {
+  margin-top: 4px;
 }
 
 .legend button {
@@ -317,7 +337,18 @@ input {
   touch-action: none;
 }
 
-#rate-chart.is-panning {
+#gold-chart {
+  display: block;
+  width: 100%;
+  min-height: 320px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.52);
+  cursor: grab;
+  touch-action: none;
+}
+
+#rate-chart.is-panning,
+#gold-chart.is-panning {
   cursor: grabbing;
 }
 

@@ -40,6 +40,23 @@ http://127.0.0.1:9343/
 
 趋势曲线支持鼠标滚轮缩放时间轴、拖拽平移时间范围，并可通过“重置时间轴”恢复全量视图。
 
+页面同时维护 XAU/USD 现货黄金价格。黄金数据保存在：
+
+```text
+gold/gold-usd-all.csv
+gold/gold-usd-YYYY.csv
+```
+
+点击“获取最新金价”会从 LBMA 公开价格端点下载尽可能完整的 Gold PM 历史价格，并补充最新可得价格；页面会在同一屏幕流中展示黄金指标、趋势曲线和原始数据。
+
+黄金趋势图左轴为 `USD / troy oz`，右轴为按本地 USD/JPY TTM 折算的 `JPY / g`：
+
+```text
+JPY/g = Gold USD/oz * USDJPY TTM / 31.1034768
+```
+
+当黄金日期没有同日汇率时，页面会使用不晚于该日的最近一条 TTM。
+
 ## 命令行
 
 从现有目录结构生成 2026 CSV：
@@ -58,6 +75,12 @@ python3 scripts/fx_rates.py update --start 2026-01-01
 
 ```bash
 python3 scripts/fx_rates.py summary --year 2026
+```
+
+更新黄金价格：
+
+```bash
+python3 scripts/gold_prices.py update
 ```
 
 ## 数据修正日志

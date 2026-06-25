@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>USD/JPY 汇率趋势</title>
+    <title>汇率和金价走势</title>
     <link rel="icon" type="image/svg+xml" href="./favicon.svg?v=20260621-red-currency" />
     <link rel="stylesheet" href="./assets/styles.css" />
   </head>
@@ -12,7 +12,7 @@
       <header class="hero">
         <div>
           <p class="eyebrow">Mizuho confirmation URL · MURC daily quote source</p>
-          <h1>美元兑日元汇率趋势</h1>
+          <h1>汇率和金价走势</h1>
           <p class="hero-copy">
             从 2026 年 1 月 1 日开始维护每天发布的 TTB / TTM / TTS 数据，保留原来的
             <code>YYYY/MM/DD/{TTB,TTM,TTS}</code> 文件结构，同时生成年度 CSV 用于分析和导出。
@@ -38,8 +38,10 @@
         </div>
         <div class="action-group">
           <button id="refresh-button" class="button is-primary" type="button">获取最新汇率</button>
+          <button id="refresh-gold-button" class="button is-primary is-gold" type="button">获取最新金价</button>
           <button id="reload-button" class="button" type="button">重新载入</button>
-          <button id="export-button" class="button" type="button">导出 CSV</button>
+          <button id="export-button" class="button" type="button">导出汇率 CSV</button>
+          <button id="export-gold-button" class="button" type="button">导出黄金 CSV</button>
         </div>
       </section>
 
@@ -76,7 +78,7 @@
       <section class="chart-card panel">
         <div class="section-head">
           <div>
-            <h2>趋势曲线</h2>
+            <h2>美元兑日元汇率曲线</h2>
             <p id="chart-subtitle">默认显示每日趋势。</p>
           </div>
           <div class="chart-tools">
@@ -94,6 +96,53 @@
           </div>
         </div>
         <canvas id="rate-chart" height="360"></canvas>
+      </section>
+
+      <section class="market-section panel">
+        <div class="section-head">
+          <div>
+            <h2>黄金价格追踪</h2>
+            <p>按 LBMA Gold PM 价格维护历史和最新可得数据，单位为 USD / troy oz。</p>
+          </div>
+          <p id="gold-data-source" class="source-status">载入中...</p>
+        </div>
+        <div class="summary-grid compact">
+          <article class="metric">
+            <span>黄金数据条数</span>
+            <strong id="gold-metric-count">0</strong>
+          </article>
+          <article class="metric">
+            <span>日期范围</span>
+            <strong id="gold-metric-range">--</strong>
+          </article>
+          <article class="metric">
+            <span>最新价格</span>
+            <strong id="gold-latest-price">--</strong>
+          </article>
+          <article class="metric">
+            <span>历史高点</span>
+            <strong id="gold-metric-high">--</strong>
+          </article>
+          <article class="metric">
+            <span>最新日元/克</span>
+            <strong id="gold-latest-yen-gram">--</strong>
+          </article>
+        </div>
+        <div class="section-head nested-head">
+          <div>
+            <h2>黄金趋势曲线</h2>
+            <p id="gold-chart-subtitle">默认显示每日 PM Fix 价格，并以右轴显示日元/克。</p>
+          </div>
+          <div class="chart-tools">
+            <div class="segmented" aria-label="黄金趋势粒度">
+              <button class="is-active" type="button" data-gold-granularity="day">天</button>
+              <button type="button" data-gold-granularity="week">周</button>
+              <button type="button" data-gold-granularity="month">月</button>
+            </div>
+            <button id="gold-reset-zoom-button" class="button is-small" type="button">重置时间轴</button>
+          </div>
+        </div>
+        <canvas id="gold-chart" height="320"></canvas>
       </section>
 
       <section class="data-card panel">
@@ -118,6 +167,28 @@
               </tr>
             </thead>
             <tbody id="rate-table"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="data-card panel">
+        <div class="section-head">
+          <div>
+            <h2>黄金原始数据</h2>
+            <p>URL 会跳转到 LBMA 贵金属价格页面，便于核对最新报价。</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>日期</th>
+                <th>星期</th>
+                <th>价格</th>
+                <th>URL</th>
+              </tr>
+            </thead>
+            <tbody id="gold-table"></tbody>
           </table>
         </div>
       </section>
@@ -166,6 +237,6 @@
       </section>
     </main>
 
-    <script src="./assets/app.js?v=20260601-1"></script>
+    <script src="./assets/app.js?v=20260625-gold-2"></script>
   </body>
 </html>
