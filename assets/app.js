@@ -539,7 +539,7 @@ function renderGoldChart() {
   const rect = canvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
   const width = Math.max(640, rect.width) * dpr;
-  const height = 320 * dpr;
+  const height = 360 * dpr;
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d");
@@ -558,7 +558,7 @@ function renderGoldChart() {
     return;
   }
 
-  const padding = { left: 68, right: 86, top: 24, bottom: 48 };
+  const padding = { left: 68, right: 86, top: 76, bottom: 92 };
   const values = points.map((point) => point.price);
   const span = Math.max(...values) - Math.min(...values);
   const min = Math.floor(Math.min(...values) - Math.max(10, span * 0.04));
@@ -724,7 +724,6 @@ function drawGoldMarker(ctx, meta, index, title, color, preferredSide) {
   const xx = meta.x(index);
   const yy = meta.y(point.price);
   const chartRight = meta.cssWidth - meta.padding.right;
-  const chartBottom = meta.cssHeight - meta.padding.bottom;
 
   ctx.save();
   ctx.setLineDash([6, 6]);
@@ -748,9 +747,7 @@ function drawGoldMarker(ctx, meta, index, title, color, preferredSide) {
   ctx.font = "600 12px Avenir Next";
   const width = Math.max(...lines.map((line) => ctx.measureText(line).width)) + 22;
   const height = 44;
-  const labelX = Math.min(Math.max(xx + 12, 12), meta.cssWidth - width - 12);
-  const proposedY = preferredSide === "above" ? yy - height - 10 : yy + 10;
-  const labelY = Math.min(Math.max(proposedY, meta.padding.top + 6), chartBottom - height - 6);
+  const { x: labelX, y: labelY } = markerLabelPosition(meta, xx, width, height, preferredSide);
 
   ctx.fillStyle = "rgba(255, 252, 245, 0.94)";
   roundRect(ctx, labelX, labelY, width, height, 13);
@@ -865,7 +862,7 @@ function renderChart() {
     return;
   }
 
-  const padding = { left: 58, right: 24, top: 24, bottom: 48 };
+  const padding = { left: 58, right: 24, top: 76, bottom: 92 };
   const values = points.flatMap((point) => series.map((key) => point[key]));
   const min = Math.floor(Math.min(...values) - 0.8);
   const max = Math.ceil(Math.max(...values) + 0.8);
@@ -1014,9 +1011,7 @@ function drawExtremaMarker(ctx, meta, index, title, color, preferredSide) {
   ctx.font = "600 12px Avenir Next";
   const width = Math.max(...lines.map((line) => ctx.measureText(line).width)) + 22;
   const height = 44;
-  const labelX = Math.min(Math.max(xx + 12, 12), meta.cssWidth - width - 12);
-  const proposedY = preferredSide === "above" ? yy - height - 10 : yy + 10;
-  const labelY = Math.min(Math.max(proposedY, meta.padding.top + 6), chartBottom - height - 6);
+  const { x: labelX, y: labelY } = markerLabelPosition(meta, xx, width, height, preferredSide);
 
   ctx.fillStyle = "rgba(255, 252, 245, 0.94)";
   roundRect(ctx, labelX, labelY, width, height, 13);
@@ -1031,6 +1026,31 @@ function drawExtremaMarker(ctx, meta, index, title, color, preferredSide) {
   ctx.font = "12px Avenir Next";
   ctx.fillText(lines[1], labelX + 11, labelY + 35);
   ctx.restore();
+}
+
+function markerLabelPosition(meta, anchorX, width, height, preferredSide) {
+  const margin = 12;
+  const chartBottom = meta.cssHeight - meta.padding.bottom;
+  const hasRoomRight = anchorX + margin + width <= meta.cssWidth - margin;
+  const hasRoomLeft = anchorX - margin - width >= margin;
+  let x;
+
+  if (hasRoomRight) {
+    x = anchorX + margin;
+  } else if (hasRoomLeft) {
+    x = anchorX - width - margin;
+  } else {
+    x = Math.min(Math.max(anchorX - width / 2, margin), meta.cssWidth - width - margin);
+  }
+
+  const topGutterY = Math.max(margin, meta.padding.top - height - 12);
+  const bottomGutterY = Math.min(meta.cssHeight - height - margin, chartBottom + 12);
+  const y = preferredSide === "above" ? topGutterY : bottomGutterY;
+
+  return {
+    x: Math.min(Math.max(x, margin), meta.cssWidth - width - margin),
+    y: Math.min(Math.max(y, margin), meta.cssHeight - height - margin),
+  };
 }
 
 const seriesConfig = {

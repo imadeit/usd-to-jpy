@@ -340,7 +340,7 @@ input {
 #gold-chart {
   display: block;
   width: 100%;
-  min-height: 320px;
+  min-height: 360px;
   border-radius: 22px;
   background: rgba(255, 255, 255, 0.52);
   cursor: grab;
