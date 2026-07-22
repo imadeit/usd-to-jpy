@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import os
 import threading
 import time
 import uuid
@@ -349,7 +350,7 @@ class RateHandler(SimpleHTTPRequestHandler):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Serve the local USD/JPY dashboard and update API.")
-    parser.add_argument("--host", default=HOST)
+    parser.add_argument("--host", default=os.environ.get("SITE_BIND_HOST", HOST))
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = parser.parse_args()
 
