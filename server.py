@@ -5,6 +5,7 @@ import argparse
 import json
 import mimetypes
 import os
+import subprocess
 import threading
 import time
 import uuid
@@ -23,6 +24,7 @@ DEFAULT_PORT = 9343
 
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = threading.Lock()
+GIT_LOCK = threading.Lock()
 
 
 def json_response(handler: SimpleHTTPRequestHandler, payload: dict, status: int = 200) -> None:
@@ -40,6 +42,130 @@ def read_payload(handler: SimpleHTTPRequestHandler) -> dict:
     if not length:
         return {}
     return json.loads(handler.rfile.read(length).decode("utf-8"))
+
+
+def git_command(args: list[str], *, timeout: int = 60, allow_failure: bool = False) -> subprocess.CompletedProcess[str]:
+    """Run a fixed Git command in this dashboard's repository only."""
+    result = subprocess.run(
+        ["git", *args],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if result.returncode and not allow_failure:
+        message = (result.stderr or result.stdout or f"git {' '.join(args)} failed").strip()
+        raise ValueError(message)
+    return result
+
+
+def safe_git_text(args: list[str], *, timeout: int = 30) -> str:
+    result = git_command(args, timeout=timeout, allow_failure=True)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def compact_git_output(result: subprocess.CompletedProcess[str]) -> str:
+    output = "\n".join(part.strip() for part in [result.stdout, result.stderr] if part and part.strip())
+    return output[:3000].rstrip() + "\n..." if len(output) > 3000 else output
+
+
+def parse_git_status_entry(line: str) -> dict | None:
+    """Parse porcelain v1 without stripping its significant leading status spaces."""
+    if len(line) < 3:
+        return None
+    status = line[:2]
+    return {
+        "status": status,
+        "path": line[3:],
+        "staged": status[0] not in {" ", "?"},
+        "unstaged": status[1] not in {" ", "?"},
+        "untracked": status == "??",
+    }
+
+
+def git_status_payload() -> dict:
+    git_command(["rev-parse", "--is-inside-work-tree"], timeout=10)
+    status_output = git_command(["status", "--porcelain=v1"], timeout=30).stdout.rstrip("\n")
+    entries = [entry for entry in (parse_git_status_entry(line) for line in status_output.splitlines()) if entry]
+    branch = safe_git_text(["branch", "--show-current"], timeout=10) or "HEAD"
+    upstream = safe_git_text(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], timeout=10)
+    ahead = behind = 0
+    if upstream:
+        counts = safe_git_text(["rev-list", "--left-right", "--count", f"{branch}...{upstream}"], timeout=20).split()
+        if len(counts) == 2 and all(value.isdigit() for value in counts):
+            ahead, behind = map(int, counts)
+    return {
+        "branch": branch,
+        "upstream": upstream,
+        "origin": safe_git_text(["remote", "get-url", "origin"], timeout=10),
+        "ahead": ahead,
+        "behind": behind,
+        "clean": not entries,
+        "total": len(entries),
+        "staged": sum(1 for entry in entries if entry["staged"]),
+        "unstaged": sum(1 for entry in entries if entry["unstaged"]),
+        "untracked": sum(1 for entry in entries if entry["untracked"]),
+        "entries": entries[:80],
+        "truncated": len(entries) > 80,
+    }
+
+
+def clean_commit_message(value: object) -> str:
+    message = " ".join(str(value or "").splitlines()).strip()
+    return message[:200] or "更新汇率和金价数据"
+
+
+def commit_git_changes(payload: dict) -> dict:
+    with GIT_LOCK:
+        before = git_status_payload()
+        if not before["total"]:
+            return {"committed": False, "reason": "no_changes", "status": before}
+        message = clean_commit_message(payload.get("message"))
+        git_command(["add", "-A"], timeout=120)
+        staged = git_status_payload()
+        if not staged["staged"]:
+            return {"committed": False, "reason": "nothing_staged", "status": staged}
+        result = git_command(["commit", "-m", message], timeout=180)
+        return {
+            "committed": True,
+            "commit": safe_git_text(["rev-parse", "--short", "HEAD"], timeout=10),
+            "message": message,
+            "output": compact_git_output(result),
+            "status": git_status_payload(),
+        }
+
+
+def pull_git_changes() -> dict:
+    with GIT_LOCK:
+        before = git_status_payload()
+        if before["total"]:
+            raise ValueError("本地有未提交改动；请先提交、暂存或清理后再拉取。")
+        if not before["upstream"]:
+            raise ValueError("当前分支没有配置上游分支，无法拉取。")
+        result = git_command(["pull", "--ff-only"], timeout=300)
+        return {
+            "pulled": True,
+            "branch": before["branch"],
+            "output": compact_git_output(result),
+            "status": git_status_payload(),
+        }
+
+
+def push_git_changes() -> dict:
+    with GIT_LOCK:
+        before = git_status_payload()
+        branch = str(before["branch"])
+        if branch == "HEAD":
+            raise ValueError("当前处于 detached HEAD，无法推送；请先切换到命名分支。")
+        args = ["push"] if before["upstream"] else ["push", "-u", "origin", branch]
+        result = git_command(args, timeout=240)
+        return {
+            "pushed": True,
+            "branch": branch,
+            "output": compact_git_output(result),
+            "status": git_status_payload(),
+        }
 
 
 def available_years() -> list[int]:
@@ -270,6 +396,13 @@ class RateHandler(SimpleHTTPRequestHandler):
             json_response(self, {"ok": True, "corrections": fx_rates.read_corrections(ROOT)})
             return
 
+        if parsed.path == "/api/git/status":
+            try:
+                json_response(self, {"ok": True, "git": git_status_payload()})
+            except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                json_response(self, {"ok": False, "error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
         if parsed.path == "/api/update-status":
             params = parse_qs(parsed.query)
             job_id = (params.get("id") or [""])[0]
@@ -343,6 +476,33 @@ class RateHandler(SimpleHTTPRequestHandler):
                 json_response(self, {"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
                 return
             json_response(self, {"ok": True, "rate": rate.to_json(), "rates": rates_payload(day.year)})
+            return
+
+        if parsed.path == "/api/git/commit":
+            try:
+                result = commit_git_changes(payload)
+            except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                json_response(self, {"ok": False, "error": str(exc)}, status=HTTPStatus.UNPROCESSABLE_ENTITY)
+                return
+            json_response(self, {"ok": True, **result})
+            return
+
+        if parsed.path == "/api/git/pull":
+            try:
+                result = pull_git_changes()
+            except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                json_response(self, {"ok": False, "error": str(exc)}, status=HTTPStatus.UNPROCESSABLE_ENTITY)
+                return
+            json_response(self, {"ok": True, **result})
+            return
+
+        if parsed.path == "/api/git/push":
+            try:
+                result = push_git_changes()
+            except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                json_response(self, {"ok": False, "error": str(exc)}, status=HTTPStatus.UNPROCESSABLE_ENTITY)
+                return
+            json_response(self, {"ok": True, **result})
             return
 
         json_response(self, {"ok": False, "error": "Unknown API endpoint."}, status=HTTPStatus.NOT_FOUND)

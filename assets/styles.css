@@ -209,9 +209,87 @@ input {
 .data-card,
 .market-section,
 .edit-card,
-.log-card {
+.log-card,
+.git-panel {
   margin-top: 18px;
   padding: 20px;
+}
+
+.git-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.git-panel[hidden],
+.git-details[hidden],
+.git-result[hidden] {
+  display: none;
+}
+
+.git-panel-head,
+.git-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.git-panel-head {
+  justify-content: space-between;
+}
+
+.git-panel-head h2 {
+  margin-bottom: 4px;
+}
+
+.git-panel-head p,
+.git-details,
+.git-result {
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+.git-actions input {
+  flex: 1 1 260px;
+  min-width: 200px;
+}
+
+.git-details {
+  display: grid;
+  gap: 5px;
+  max-height: 180px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.git-file {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.git-file code {
+  color: var(--gold);
+  font-size: 0.8rem;
+}
+
+.git-file span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-result[data-tone="success"] {
+  color: var(--green);
+}
+
+.git-result[data-tone="error"] {
+  color: var(--red);
 }
 
 .progress-head {
@@ -442,6 +520,7 @@ td a {
 
   .control-group,
   .action-group,
+  .git-actions,
   .segmented,
   .chart-tools,
   .legend {
@@ -451,6 +530,10 @@ td a {
   .button,
   .segmented button,
   .legend button {
+    width: 100%;
+  }
+
+  .git-actions input {
     width: 100%;
   }
 

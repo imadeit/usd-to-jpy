@@ -42,7 +42,26 @@
           <button id="reload-button" class="button" type="button">重新载入</button>
           <button id="export-button" class="button" type="button">导出汇率 CSV</button>
           <button id="export-gold-button" class="button" type="button">导出黄金 CSV</button>
+          <button id="git-toggle" class="button" type="button" aria-expanded="false" aria-controls="git-panel">Git 状态</button>
         </div>
+      </section>
+
+      <section id="git-panel" class="git-panel panel" aria-label="Git 工作区" hidden>
+        <div class="git-panel-head">
+          <div>
+            <h2>Git 工作区</h2>
+            <p id="git-summary">点击“Git 状态”检查当前工作区。</p>
+          </div>
+          <button id="git-refresh" class="button is-small" type="button">刷新</button>
+        </div>
+        <div class="git-actions">
+          <input id="git-message" type="text" value="更新汇率和金价数据" maxlength="200" aria-label="Git 提交说明" />
+          <button id="git-commit" class="button is-primary" type="button">提交 Git</button>
+          <button id="git-pull" class="button" type="button">拉取 GitHub</button>
+          <button id="git-push" class="button" type="button">推送 GitHub</button>
+        </div>
+        <p id="git-result" class="git-result" role="status" hidden></p>
+        <div id="git-details" class="git-details" hidden></div>
       </section>
 
       <section class="progress-card panel" id="progress-card" hidden>
@@ -237,6 +256,6 @@
       </section>
     </main>
 
-    <script src="./assets/app.js?v=20260625-gold-2"></script>
+    <script src="./assets/app.js?v=20260727-git"></script>
   </body>
 </html>

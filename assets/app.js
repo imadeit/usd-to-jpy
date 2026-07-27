@@ -29,6 +29,7 @@ const state = {
   goldViewport: { start: 0, end: 1 },
   drag: null,
   goldDrag: null,
+  gitStatus: null,
 };
 
 const els = {
@@ -40,6 +41,16 @@ const els = {
   reloadButton: document.querySelector("#reload-button"),
   exportButton: document.querySelector("#export-button"),
   exportGoldButton: document.querySelector("#export-gold-button"),
+  gitToggle: document.querySelector("#git-toggle"),
+  gitPanel: document.querySelector("#git-panel"),
+  gitSummary: document.querySelector("#git-summary"),
+  gitRefresh: document.querySelector("#git-refresh"),
+  gitMessage: document.querySelector("#git-message"),
+  gitCommit: document.querySelector("#git-commit"),
+  gitPull: document.querySelector("#git-pull"),
+  gitPush: document.querySelector("#git-push"),
+  gitResult: document.querySelector("#git-result"),
+  gitDetails: document.querySelector("#git-details"),
   scopeButtons: document.querySelectorAll("[data-scope]"),
   progressCard: document.querySelector("#progress-card"),
   progressTitle: document.querySelector("#progress-title"),
@@ -219,6 +230,137 @@ async function loadData() {
   }
   await loadYearData();
   await loadGoldYearData();
+}
+
+function setGitResult(message = "", tone = "") {
+  els.gitResult.textContent = message;
+  els.gitResult.hidden = !message;
+  els.gitResult.dataset.tone = tone;
+}
+
+function renderGitStatus(status) {
+  state.gitStatus = status;
+  const total = Number(status?.total || 0);
+  const branch = status?.branch || "HEAD";
+  const changeSummary = total
+    ? `${branch}：${total} 个改动（暂存 ${Number(status.staged || 0)}，未暂存 ${Number(status.unstaged || 0)}，未跟踪 ${Number(status.untracked || 0)}）`
+    : `${branch}：工作区干净`;
+  const syncSummary = status?.upstream
+    ? ` · ${status.upstream}：领先 ${Number(status.ahead || 0)}，落后 ${Number(status.behind || 0)}`
+    : " · 未配置上游分支";
+  els.gitSummary.textContent = `${changeSummary}${syncSummary}`;
+  els.gitCommit.disabled = total <= 0;
+  els.gitPull.disabled = total > 0 || !status?.upstream;
+  els.gitPush.disabled = !status?.origin || branch === "HEAD";
+
+  const entries = status?.entries || [];
+  if (!entries.length) {
+    els.gitDetails.hidden = true;
+    els.gitDetails.innerHTML = "";
+    return;
+  }
+  const files = entries.map((entry) => `
+    <div class="git-file">
+      <code>${escapeHtml(entry.status || "")}</code>
+      <span title="${escapeHtml(entry.path || "")}">${escapeHtml(entry.path || "")}</span>
+    </div>
+  `);
+  if (status.truncated) files.push("<p>仅显示前 80 个改动文件。</p>");
+  els.gitDetails.innerHTML = files.join("");
+  els.gitDetails.hidden = false;
+}
+
+function setGitWorking(message) {
+  els.gitSummary.textContent = message;
+  els.gitRefresh.disabled = true;
+  els.gitCommit.disabled = true;
+  els.gitPull.disabled = true;
+  els.gitPush.disabled = true;
+}
+
+async function gitRequest(path, payload) {
+  const response = await fetch(path, {
+    method: payload === undefined ? "GET" : "POST",
+    headers: payload === undefined ? undefined : { "Content-Type": "application/json" },
+    body: payload === undefined ? undefined : JSON.stringify(payload),
+    cache: "no-store",
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || !body.ok) throw new Error(body.error || "Git 操作失败。");
+  return body;
+}
+
+async function refreshGitStatus() {
+  setGitWorking("正在检查 Git 状态...");
+  try {
+    const payload = await gitRequest("./api/git/status");
+    renderGitStatus(payload.git || {});
+    return payload.git || {};
+  } catch (error) {
+    state.gitStatus = null;
+    els.gitSummary.textContent = "无法读取 Git 状态。请通过 python3 server.py 打开本页面。";
+    setGitResult(error.message, "error");
+    return null;
+  } finally {
+    els.gitRefresh.disabled = false;
+  }
+}
+
+async function toggleGitPanel() {
+  const hidden = els.gitPanel.hidden;
+  els.gitPanel.hidden = !hidden;
+  els.gitToggle.setAttribute("aria-expanded", String(hidden));
+  if (hidden) {
+    setGitResult();
+    await refreshGitStatus();
+  }
+}
+
+async function commitGitChanges() {
+  const status = await refreshGitStatus();
+  if (!status || !Number(status.total || 0)) return;
+  const message = els.gitMessage.value.trim() || "更新汇率和金价数据";
+  if (!confirm(`将暂存并提交当前 ${Number(status.total || 0)} 个改动：\n\n${message}\n\n是否继续？`)) return;
+  setGitWorking("正在提交 Git 改动...");
+  try {
+    const payload = await gitRequest("./api/git/commit", { message });
+    renderGitStatus(payload.status || {});
+    setGitResult(payload.committed ? `已提交：${payload.commit || "完成"}` : "没有可提交的改动。", "success");
+  } catch (error) {
+    setGitResult(error.message, "error");
+    await refreshGitStatus();
+  }
+}
+
+async function pullGitChanges() {
+  const status = await refreshGitStatus();
+  if (!status || Number(status.total || 0) || !status.upstream) return;
+  if (!confirm(`将以 fast-forward 方式从 ${status.upstream} 拉取更新。是否继续？`)) return;
+  setGitWorking("正在拉取 GitHub 更新...");
+  try {
+    const payload = await gitRequest("./api/git/pull", {});
+    await loadData();
+    renderGitStatus(payload.status || {});
+    setGitResult(`已拉取 ${payload.branch || "当前分支"} 的更新。`, "success");
+  } catch (error) {
+    setGitResult(error.message, "error");
+    await refreshGitStatus();
+  }
+}
+
+async function pushGitChanges() {
+  const status = await refreshGitStatus();
+  if (!status) return;
+  if (!confirm(`将推送分支 ${status.branch || "HEAD"} 到远端。是否继续？`)) return;
+  setGitWorking("正在推送 GitHub 更新...");
+  try {
+    const payload = await gitRequest("./api/git/push", {});
+    renderGitStatus(payload.status || {});
+    setGitResult(`已推送 ${payload.branch || "当前分支"}。`, "success");
+  } catch (error) {
+    setGitResult(error.message, "error");
+    await refreshGitStatus();
+  }
 }
 
 async function loadYearData() {
@@ -1594,6 +1736,11 @@ els.refreshGoldButton.addEventListener("click", startGoldUpdate);
 els.reloadButton.addEventListener("click", loadData);
 els.exportButton.addEventListener("click", exportCsv);
 els.exportGoldButton.addEventListener("click", exportGoldCsv);
+els.gitToggle.addEventListener("click", toggleGitPanel);
+els.gitRefresh.addEventListener("click", refreshGitStatus);
+els.gitCommit.addEventListener("click", commitGitChanges);
+els.gitPull.addEventListener("click", pullGitChanges);
+els.gitPush.addEventListener("click", pushGitChanges);
 els.cancelEditButton.addEventListener("click", () => {
   els.editCard.hidden = true;
 });
