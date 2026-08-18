@@ -13,6 +13,7 @@
   --shadow: 0 26px 80px rgba(55, 48, 36, 0.13);
   --title-font: "Avenir Next", "Hiragino Sans", "PingFang SC", sans-serif;
   --body-font: "Iowan Old Style", "Yu Mincho", "Songti SC", serif;
+  --page-gutter: 10px;
 }
 
 * {
@@ -41,9 +42,9 @@ code {
 }
 
 .shell {
-  width: min(1220px, calc(100% - 30px));
+  width: calc(100% - (var(--page-gutter) * 2));
   margin: 0 auto;
-  padding: 34px 0 48px;
+  padding: 10px 0 24px;
 }
 
 .panel,
@@ -502,6 +503,10 @@ td a {
 }
 
 @media (max-width: 760px) {
+  :root {
+    --page-gutter: 6px;
+  }
+
   .hero,
   .toolbar,
   .edit-form {
